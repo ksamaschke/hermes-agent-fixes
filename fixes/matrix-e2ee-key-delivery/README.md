@@ -38,14 +38,16 @@ Before sending an encrypted room event, the adapter must:
 3. enumerate current joined peer users and device identities;
 4. refresh peer device keys after reconnect and before a stale-cache window expires;
 5. reuse or create the outbound Megolm session and explicitly share it with current eligible peer devices;
-6. record the actual `(user, device, identity-key)` recipients prepared by the share path;
-7. verify that the persisted outbound session is the same session that was shared and is marked shared;
-8. fail closed on zero recipients, partial recipients, invalid device data, or crypto-state inspection errors;
-9. avoid uploading media bytes until room state and key readiness have passed;
-10. apply the same encrypted-send path to text, edits, reactions, notices, media, and files;
-11. retain Mautrix's persisted `m.room_key_request` handling;
-12. fence sends and key work against reconnect/disconnect lifecycle changes;
-13. redact credentials and sensitive URL material from logs and user-visible errors.
+6. recreate outbound Olm sessions for current eligible devices during recovery so stale peer sessions cannot silently survive;
+7. record the actual `(user, device, identity-key)` recipients prepared by the share path;
+8. verify that the persisted outbound session is the same session that was shared and is marked shared;
+9. fail closed on zero recipients, partial recipients, invalid device data, or crypto-state inspection errors;
+10. avoid uploading media bytes until room state and key readiness have passed;
+11. apply the same encrypted-send path to text, edits, reactions, notices, media, and files;
+12. retain Mautrix's persisted `m.room_key_request` handling;
+13. keep Matrix sync/key-request handling online when room reconciliation fails; only outbound encrypted sends fail closed;
+14. fence sends and key work against reconnect/disconnect lifecycle changes;
+15. redact credentials and sensitive URL material from logs and user-visible errors.
 
 A refresh interval of `0` means **refresh on every encrypted readiness check**. It must not disable the safety refresh.
 
@@ -68,6 +70,8 @@ A standalone cron sender that does not own the persistent crypto machine must no
 - [ ] Existing crypto database and Matrix device ID remain intact.
 - [ ] A reconnect refreshes peer device lists before the next encrypted send.
 - [ ] A new peer device is included without deleting or recreating the bot identity.
+- [ ] Current peer devices receive fresh Olm sessions during recovery.
+- [ ] Mautrix typed `KeyID` device-key objects are validated through their typed properties.
 - [ ] A deleted or blacklisted peer device is not treated as an eligible target.
 - [ ] Empty and partial device-key responses clear refresh state and fail closed.
 - [ ] Zero prepared recipients prevent the encrypted event from being sent.

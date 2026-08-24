@@ -1,5 +1,5 @@
 diff --git a/plugins/platforms/matrix/adapter.py b/plugins/platforms/matrix/adapter.py
-index 0da6f37c96..74531c8728 100644
+index 0da6f37c96..1015056c1e 100644
 --- a/plugins/platforms/matrix/adapter.py
 +++ b/plugins/platforms/matrix/adapter.py
 @@ -47,6 +47,9 @@ Environment variables:
@@ -735,7 +735,7 @@ index 0da6f37c96..74531c8728 100644
              if isinstance(sync_data, dict):
                  self._last_sync_ts = time.time()
                  rooms_join = sync_data.get("rooms", {}).get("join", {})
-@@ -2115,29 +2359,59 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2115,29 +2359,54 @@ class MatrixAdapter(BasePlatformAdapter):
                      len(self._joined_rooms),
                  )
                  # Build DM room cache from m.direct account data.
@@ -790,17 +790,12 @@ index 0da6f37c96..74531c8728 100644
 +                    "Matrix: initial key share failed (%s)",
 +                    type(exc).__name__,
 +                )
-+            if (
-+                self._e2ee_recipient_enforcement_active
-+                and not await self._reconcile_encrypted_rooms()
-+            ):
-+                logger.error("Matrix: refusing readiness after encrypted-room reconciliation failure")
-+                await self._disconnect_impl()
-+                return False
++            if self._e2ee_recipient_enforcement_active:
++                await self._reconcile_encrypted_rooms_before_ready()
 
          # Start the sync loop.
          self._sync_task = asyncio.create_task(self._sync_loop())
-@@ -2145,48 +2419,539 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2145,48 +2414,578 @@ class MatrixAdapter(BasePlatformAdapter):
          return True
 
      async def disconnect(self) -> None:
@@ -1055,10 +1050,15 @@ index 0da6f37c96..74531c8728 100644
 +                    self._e2ee_room_targets.pop(room_id, None)
 +                    raise RuntimeError(f"Matrix device refresh returned no devices for {user_id}")
 +                for device_id, device_keys in devices.items():
-+                    keys = getattr(device_keys, "keys", {}) or {}
-+                    if not keys.get(f"curve25519:{device_id}") or not keys.get(
-+                        f"ed25519:{device_id}"
-+                    ):
++                    curve_key = getattr(device_keys, "curve25519", None)
++                    signing_key = getattr(device_keys, "ed25519", None)
++                    if curve_key is None and signing_key is None:
++                        # Lightweight test doubles may expose the raw string-keyed
++                        # mapping instead of Mautrix's typed KeyID mapping.
++                        keys = getattr(device_keys, "keys", {}) or {}
++                        curve_key = keys.get(f"curve25519:{device_id}")
++                        signing_key = keys.get(f"ed25519:{device_id}")
++                    if not curve_key or not signing_key:
 +                        self._device_refresh_ts.pop(room_id, None)
 +                        self._e2ee_room_targets.pop(room_id, None)
 +                        raise RuntimeError(
@@ -1145,6 +1145,28 @@ index 0da6f37c96..74531c8728 100644
 +                )
 +        return targets
 +
++    async def _refresh_olm_sessions_for_targets(self, users: list[Any]) -> None:
++        """Recreate Olm sessions for current peers before a recovery share."""
++        crypto = getattr(self._client, "crypto", None)
++        store = getattr(crypto, "crypto_store", None) if crypto else None
++        create_sessions = getattr(crypto, "_create_outbound_sessions", None) if crypto else None
++        if store is None or create_sessions is None:
++            return
++        blacklisted = getattr(TrustState, "BLACKLISTED", None)
++        device_map: Dict[Any, Dict[Any, Any]] = {}
++        for user_id in users:
++            devices = await store.get_devices(UserID(str(user_id)))
++            eligible = {
++                device_id: device
++                for device_id, device in (devices or {}).items()
++                if not getattr(device, "deleted", False)
++                and (blacklisted is None or getattr(device, "trust", None) != blacklisted)
++            }
++            if eligible:
++                device_map[UserID(str(user_id))] = eligible
++        if device_map:
++            await create_sessions(device_map, _force_recreate_session=True)
++
 +    async def _ensure_encrypted_room_ready(self, room_id: str) -> None:
 +        task = asyncio.current_task()
 +        if task is not None:
@@ -1217,6 +1239,7 @@ index 0da6f37c96..74531c8728 100644
 +
 +            self._e2ee_room_targets.pop(room_key, None)
 +            try:
++                await self._refresh_olm_sessions_for_targets(users)
 +                await crypto.share_group_session(RoomID(room_id), users)
 +            except asyncio.CancelledError:
 +                self._e2ee_room_targets.pop(room_key, None)
@@ -1253,6 +1276,16 @@ index 0da6f37c96..74531c8728 100644
 +                set(targets),
 +            )
 +
++    async def _reconcile_encrypted_rooms_before_ready(self) -> bool:
++        """Reconcile rooms without taking the whole Matrix client offline."""
++        reconciled = await self._reconcile_encrypted_rooms()
++        if not reconciled:
++            logger.error(
++                "Matrix: encrypted-room key reconciliation failed; "
++                "keeping Matrix connected while encrypted sends remain fail-closed"
++            )
++        return reconciled
++
 +    async def _reconcile_encrypted_rooms(self) -> bool:
 +        """Re-share active Megolm sessions after initial sync/reconnect."""
 +        success = True
@@ -1268,9 +1301,10 @@ index 0da6f37c96..74531c8728 100644
 +            except Exception as exc:
 +                success = False
 +                logger.error(
-+                    "Matrix: encrypted-room key reconciliation failed for %s (%s)",
++                    "Matrix: encrypted-room key reconciliation failed for %s (%s): %s",
 +                    room_id,
 +                    type(exc).__name__,
++                    _matrix_exception_summary(exc),
 +                )
 +        return success
 +
@@ -1349,7 +1383,7 @@ index 0da6f37c96..74531c8728 100644
      async def send(
          self,
          chat_id: str,
-@@ -2198,6 +2963,7 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2198,6 +2997,7 @@ class MatrixAdapter(BasePlatformAdapter):
 
          if not content:
              return SendResult(success=True)
@@ -1357,7 +1391,7 @@ index 0da6f37c96..74531c8728 100644
 
          formatted = self.format_message(content)
          chunks = self.truncate_message(formatted, self.max_message_length)
-@@ -2210,12 +2976,13 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2210,12 +3010,13 @@ class MatrixAdapter(BasePlatformAdapter):
 
              try:
                  event_id = await asyncio.wait_for(
@@ -1374,7 +1408,7 @@ index 0da6f37c96..74531c8728 100644
                  )
                  last_event_id = str(event_id)
                  logger.info("Matrix: sent event %s to %s", last_event_id, chat_id)
-@@ -2223,15 +2990,31 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2223,15 +3024,31 @@ class MatrixAdapter(BasePlatformAdapter):
                  # On E2EE errors, retry after sharing keys.
                  if self._encryption and getattr(self._client, "crypto", None):
                      try:
@@ -1415,7 +1449,7 @@ index 0da6f37c96..74531c8728 100644
                          last_event_id = str(event_id)
                          logger.info(
                              "Matrix: sent event %s to %s (after key share)",
-@@ -2241,13 +3024,23 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2241,13 +3058,23 @@ class MatrixAdapter(BasePlatformAdapter):
                          continue
                      except Exception as retry_exc:
                          logger.error(
@@ -1444,7 +1478,7 @@ index 0da6f37c96..74531c8728 100644
 
          return SendResult(success=True, message_id=last_event_id)
 
-@@ -2352,14 +3145,17 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2352,14 +3179,17 @@ class MatrixAdapter(BasePlatformAdapter):
          }
 
          try:
@@ -1465,7 +1499,7 @@ index 0da6f37c96..74531c8728 100644
 
      async def send_image(
          self,
-@@ -2382,9 +3178,9 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2382,9 +3212,9 @@ class MatrixAdapter(BasePlatformAdapter):
              data, ct, fname = await self._download_external_media_with_cap(image_url)
          except Exception as exc:
              logger.warning(
@@ -1477,7 +1511,7 @@ index 0da6f37c96..74531c8728 100644
              )
              fallback = (
                  "I couldn't download and upload the image to Matrix. "
-@@ -2712,7 +3508,11 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2712,7 +3542,11 @@ class MatrixAdapter(BasePlatformAdapter):
                  if reaction_result:
                      prompt.bot_reaction_events[emoji] = str(reaction_result)
              except Exception as exc:
@@ -1490,7 +1524,7 @@ index 0da6f37c96..74531c8728 100644
 
          return result
 
-@@ -2793,7 +3593,11 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2793,7 +3627,11 @@ class MatrixAdapter(BasePlatformAdapter):
                  if reaction_event_id:
                      prompt.bot_reaction_events[emoji] = str(reaction_event_id)
              except Exception as exc:
@@ -1503,7 +1537,7 @@ index 0da6f37c96..74531c8728 100644
 
          return result
 
-@@ -2853,7 +3657,11 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2853,7 +3691,11 @@ class MatrixAdapter(BasePlatformAdapter):
                  if reaction_event_id:
                      prompt.bot_reaction_events[emoji] = str(reaction_event_id)
              except Exception as exc:
@@ -1516,7 +1550,7 @@ index 0da6f37c96..74531c8728 100644
 
          return result
 
-@@ -2879,8 +3687,41 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2879,8 +3721,41 @@ class MatrixAdapter(BasePlatformAdapter):
          metadata: Optional[Dict[str, Any]] = None,
          is_voice: bool = False,
          voice_metadata: Optional[Dict[str, Any]] = None,
@@ -1558,7 +1592,7 @@ index 0da6f37c96..74531c8728 100644
          if len(data) > self._max_media_bytes:
              return SendResult(
                  success=False,
-@@ -2889,32 +3730,58 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2889,32 +3764,58 @@ class MatrixAdapter(BasePlatformAdapter):
 
          upload_data = data
          encrypted_file = None
@@ -1637,7 +1671,7 @@ index 0da6f37c96..74531c8728 100644
 
          # Build media message content.
          msg_content: Dict[str, Any] = {
-@@ -2950,14 +3817,18 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -2950,14 +3851,18 @@ class MatrixAdapter(BasePlatformAdapter):
          self._apply_relation_metadata(msg_content, reply_to=reply_to, metadata=metadata)
 
          try:
@@ -1659,7 +1693,7 @@ index 0da6f37c96..74531c8728 100644
 
      async def _send_local_file(
          self,
-@@ -3070,7 +3941,10 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -3070,7 +3975,10 @@ class MatrixAdapter(BasePlatformAdapter):
                      try:
                          await self._dispatch_sync(sync_data)
                      except Exception as exc:
@@ -1671,7 +1705,7 @@ index 0da6f37c96..74531c8728 100644
                      self._schedule_pending_invite_joins(sync_data)
                      # Let freshly scheduled invite joins start before the next
                      # sync iteration without waiting for slow or stuck joins.
-@@ -3090,10 +3964,14 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -3090,10 +3998,14 @@ class MatrixAdapter(BasePlatformAdapter):
                      or "forbidden" in err_str
                  ):
                      logger.error(
@@ -1688,7 +1722,7 @@ index 0da6f37c96..74531c8728 100644
                  await asyncio.sleep(5)
 
      # ------------------------------------------------------------------
-@@ -3199,9 +4077,9 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -3199,9 +4111,9 @@ class MatrixAdapter(BasePlatformAdapter):
              return await self._is_dm_room(room_id)
          except Exception as exc:
              logger.debug(
@@ -1700,7 +1734,7 @@ index 0da6f37c96..74531c8728 100644
              )
              return False
 
-@@ -3820,36 +4698,62 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -3820,36 +4732,62 @@ class MatrixAdapter(BasePlatformAdapter):
              inviter=inviter,
          )
 
@@ -1790,7 +1824,7 @@ index 0da6f37c96..74531c8728 100644
 
      def _schedule_invite_join(
          self,
-@@ -3866,16 +4770,54 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -3866,16 +4804,54 @@ class MatrixAdapter(BasePlatformAdapter):
              return
 
          async def _join_invite() -> None:
@@ -1850,7 +1884,7 @@ index 0da6f37c96..74531c8728 100644
              finally:
                  self._invite_join_tasks.pop(room_id, None)
 
-@@ -3917,15 +4859,15 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -3917,15 +4893,15 @@ class MatrixAdapter(BasePlatformAdapter):
              }
          }
          try:
@@ -1869,7 +1903,7 @@ index 0da6f37c96..74531c8728 100644
              return None
 
      async def _redact_reaction(
-@@ -3957,9 +4899,9 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -3957,9 +4933,9 @@ class MatrixAdapter(BasePlatformAdapter):
                  raise
              except Exception as exc:
                  logger.debug(
@@ -1881,7 +1915,7 @@ index 0da6f37c96..74531c8728 100644
                  )
 
          task = asyncio.create_task(_redact_later())
-@@ -4074,7 +5016,10 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4074,7 +5050,10 @@ class MatrixAdapter(BasePlatformAdapter):
                          # Redact bot's seed reactions, leaving only the user's
                          await self._redact_bot_approval_reactions(room_id, prompt)
                  except Exception as exc:
@@ -1893,7 +1927,7 @@ index 0da6f37c96..74531c8728 100644
                  return
 
              model_prompt = self._model_picker_prompts_by_event.get(reacts_to)
-@@ -4107,10 +5052,13 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4107,10 +5086,13 @@ class MatrixAdapter(BasePlatformAdapter):
                      if confirmation:
                          await self.send(room_id, confirmation, reply_to=reacts_to)
                  except Exception as exc:
@@ -1909,7 +1943,7 @@ index 0da6f37c96..74531c8728 100644
                          reply_to=reacts_to,
                      )
                  return
-@@ -4141,10 +5089,13 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4141,10 +5123,13 @@ class MatrixAdapter(BasePlatformAdapter):
                      if confirmation:
                          await self.send(room_id, confirmation, reply_to=reacts_to)
                  except Exception as exc:
@@ -1925,7 +1959,7 @@ index 0da6f37c96..74531c8728 100644
                          reply_to=reacts_to,
                      )
                  return
-@@ -4204,7 +5155,10 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4204,7 +5189,10 @@ class MatrixAdapter(BasePlatformAdapter):
          try:
              await self.send(room_id, text, reply_to=target_event_id)
          except Exception as exc:
@@ -1937,7 +1971,7 @@ index 0da6f37c96..74531c8728 100644
 
      async def _expire_matrix_approval_prompt(
          self,
-@@ -4258,7 +5212,11 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4258,7 +5246,11 @@ class MatrixAdapter(BasePlatformAdapter):
                  await self.redact_message(room_id, evt_id, "model picker resolved")
                  logger.debug("Matrix: redacted model picker reaction %s (%s)", emoji, evt_id)
              except Exception as exc:
@@ -1950,7 +1984,7 @@ index 0da6f37c96..74531c8728 100644
 
      # ------------------------------------------------------------------
      # Text message aggregation (handles Matrix client-side splits)
-@@ -4339,7 +5297,10 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4339,7 +5331,10 @@ class MatrixAdapter(BasePlatformAdapter):
              try:
                  await self.send_read_receipt(room_id, event_id)
              except Exception as exc:  # pragma: no cover — defensive
@@ -1962,7 +1996,7 @@ index 0da6f37c96..74531c8728 100644
 
          asyncio.ensure_future(_send())
 
-@@ -4366,7 +5327,7 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4366,7 +5361,7 @@ class MatrixAdapter(BasePlatformAdapter):
              logger.debug("Matrix: sent read receipt for %s in %s", event_id, room_id)
              return True
          except Exception as exc:
@@ -1971,7 +2005,7 @@ index 0da6f37c96..74531c8728 100644
              return False
 
      # ------------------------------------------------------------------
-@@ -4382,17 +5343,36 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4382,17 +5377,36 @@ class MatrixAdapter(BasePlatformAdapter):
          """Redact (delete) a message or event from a room."""
          if not self._client:
              return False
@@ -2019,7 +2053,7 @@ index 0da6f37c96..74531c8728 100644
 
      # ------------------------------------------------------------------
      # Room creation & management
-@@ -4435,20 +5415,39 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4435,20 +5449,39 @@ class MatrixAdapter(BasePlatformAdapter):
              logger.info("Matrix: created room %s (%s)", room_id_str, name or "unnamed")
              return room_id_str
          except Exception as exc:
@@ -2068,7 +2102,7 @@ index 0da6f37c96..74531c8728 100644
 
      async def fetch_history(
          self,
-@@ -4484,7 +5483,7 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4484,7 +5517,7 @@ class MatrixAdapter(BasePlatformAdapter):
                  chunk = response.get("chunk")
              return [self._serialize_history_event(evt) for evt in (chunk or [])]
          except Exception as exc:
@@ -2077,7 +2111,7 @@ index 0da6f37c96..74531c8728 100644
              return []
 
      def _serialize_history_event(self, event: Any) -> dict[str, Any]:
-@@ -4533,7 +5532,7 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4533,7 +5566,7 @@ class MatrixAdapter(BasePlatformAdapter):
              logger.debug("Matrix: presence set to %s", state)
              return True
          except Exception as exc:
@@ -2086,7 +2120,7 @@ index 0da6f37c96..74531c8728 100644
              return False
 
      # ------------------------------------------------------------------
-@@ -4553,14 +5552,17 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4553,14 +5586,17 @@ class MatrixAdapter(BasePlatformAdapter):
          msg_content = self._build_text_message_content(text, msgtype=msgtype)
 
          try:
@@ -2107,7 +2141,7 @@ index 0da6f37c96..74531c8728 100644
 
      # ------------------------------------------------------------------
      # Helpers
-@@ -4750,7 +5752,10 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4750,7 +5786,10 @@ class MatrixAdapter(BasePlatformAdapter):
              elif isinstance(resp, dict):
                  dm_data = resp
          except Exception as exc:
@@ -2119,7 +2153,7 @@ index 0da6f37c96..74531c8728 100644
 
          if dm_data is None:
              return
-@@ -4798,7 +5803,10 @@ class MatrixAdapter(BasePlatformAdapter):
+@@ -4798,7 +5837,10 @@ class MatrixAdapter(BasePlatformAdapter):
                      "Matrix: recorded %s as DM room (inviter=%s)", room_id, inviter
                  )
              except Exception as exc:
@@ -2131,7 +2165,7 @@ index 0da6f37c96..74531c8728 100644
 
          # Update local cache so _resolve_room_identity sees it immediately.
          self._dm_rooms[room_id] = True
-@@ -5253,10 +6261,50 @@ async def _standalone_send(
+@@ -5253,10 +6295,50 @@ async def _standalone_send(
          # invoked via asyncio.run_coroutine_threadsafe() from cron jobs.
          async with aiohttp.ClientSession() as session:
              async def _do_send():
@@ -2184,7 +2218,7 @@ index 0da6f37c96..74531c8728 100644
                      data = await resp.json()
                      return {"success": True, "platform": "matrix", "chat_id": chat_id, "message_id": data.get("event_id")}
              try:
-@@ -5264,7 +6312,7 @@ async def _standalone_send(
+@@ -5264,7 +6346,7 @@ async def _standalone_send(
              except asyncio.TimeoutError:
                  return {"error": "Matrix API timeout (30s)"}
      except Exception as e:
@@ -2193,7 +2227,7 @@ index 0da6f37c96..74531c8728 100644
 
 
  def interactive_setup() -> None:
-@@ -5333,7 +6381,7 @@ def interactive_setup() -> None:
+@@ -5333,7 +6415,7 @@ def interactive_setup() -> None:
                          "Install failed — run manually: pip install "
                          "'mautrix[encryption]' asyncpg aiosqlite Markdown aiohttp-socks"
                      )
@@ -2202,7 +2236,7 @@ index 0da6f37c96..74531c8728 100644
          except ImportError:
              try:
                  __import__("mautrix")
-@@ -5410,6 +6458,8 @@ def _apply_yaml_config(yaml_cfg: dict, matrix_cfg: dict) -> dict | None:
+@@ -5410,6 +6492,8 @@ def _apply_yaml_config(yaml_cfg: dict, matrix_cfg: dict) -> dict | None:
          os.environ["MATRIX_DM_MENTION_THREADS"] = str(matrix_cfg["dm_mention_threads"]).lower()
      if "max_message_length" in matrix_cfg and not os.getenv("MATRIX_MAX_MESSAGE_LENGTH"):
          os.environ["MATRIX_MAX_MESSAGE_LENGTH"] = str(matrix_cfg["max_message_length"])
