@@ -4,7 +4,8 @@
 
 The optional patch bundle was extracted from the verified Hermes worktree used to diagnose Matrix room-key delivery after reconnects.
 
-- Source commit: `73c74bec34d5f101fa88999b46327e2ce45bc125`
+- Source commit: `1cad9f1fabe36687fb6a7522fe93059ca09dcb63`
+- Integrated fork commit: `9bcc57c2399c27bb64d4196e8677d44b4c1d389d`
 - Target code area: `plugins/platforms/matrix/adapter.py`
 - Mautrix API reviewed: `0.21.1`
 
