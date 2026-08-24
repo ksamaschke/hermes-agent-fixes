@@ -7,7 +7,7 @@ The optional patch bundle was extracted from the verified Hermes worktree used t
 - Initial source commit: `1cad9f1fabe36687fb6a7522fe93059ca09dcb63`
 - Final bundle source commit: `b5df40697f`
 - Integrated fork commit: `9bcc57c2399c27bb64d4196e8677d44b4c1d389d`
-- Forgejo follow-up PR: `hermes/hermes-agent#2` (head `25a5cc1c39`)
+- Integrated Forgejo follow-up commit: `aa0ab3a96d9456514b0540e2022d552af7a05586`
 - Target code area: `plugins/platforms/matrix/adapter.py`
 - Mautrix API reviewed: `0.21.1`
 
