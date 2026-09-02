@@ -151,15 +151,19 @@ platform reconnect: successful after bounded retries
 
 The Hermes checkout remained clean and the user plugin remained the single enabled Matrix owner.
 
-This establishes **loaded and connected**, not recipient-visible E2EE success. A fresh external encrypted message is still required to prove:
+This establishes **loaded and connected**.
 
-- inbound decryption and room/session routing;
-- agent completion;
-- a positive recipient target count during Megolm preparation;
-- an encrypted sent event; and
-- a visibly decrypted reply on the recipient client.
+## External live evidence
 
-Startup, tests, sender-side event IDs, or a healthy API endpoint cannot prove the final item.
+A fresh probe supplied from an external Matrix client completed the full encrypted path:
+
+- the gateway decrypted and routed the exact probe in an authoritatively encrypted Megolm room;
+- the current joined-peer device set was non-empty, every eligible target had an identity key, and no eligible target was deleted or blacklisted;
+- the guarded text-send path completed encrypted-room readiness before the event was emitted;
+- the gateway produced the agent response and logged the following sent event; and
+- the external recipient explicitly confirmed that the reply was visible and decryptable.
+
+No private room, user, device, homeserver, host, event, or session identifier is included in this evidence. The final recipient-visible result is based on the external client confirmation, not inferred from startup, tests, sender-side event IDs, or an HTTP status.
 
 ## Review focus
 
