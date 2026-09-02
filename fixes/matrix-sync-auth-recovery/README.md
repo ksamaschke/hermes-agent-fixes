@@ -1,215 +1,217 @@
-# Matrix sync authentication recovery
+# Combined Matrix E2EE key delivery and sync-auth recovery
 
 ## Purpose
 
-This bundle prevents Hermes' Matrix inbound sync loop from stopping permanently when a transient transport exception or human-readable response message happens to contain authentication-like text such as `401`, `403`, `unauthorized`, `forbidden`, or `unknown_token`.
+This bundle provides one explicitly enabled Hermes user plugin for two Matrix failure modes:
 
-It uses Hermes' supported user-plugin registration mechanism. It does **not** modify the Hermes checkout, rotate the Matrix access token, replace the Matrix device, or delete the E2EE crypto store.
+1. transient sync errors being misclassified as permanent authentication failures; and
+2. encrypted events being sent without verifiable Megolm room-key delivery to current peer devices.
 
-## Symptom
+The plugin owns the `matrix` platform registration once. It does **not** modify the Hermes checkout, rotate the Matrix access token, replace the Matrix device, delete the E2EE crypto store, or weaken encrypted-room policy.
 
-A Hermes gateway can appear partly healthy while Matrix inbound delivery is dead:
+## Why the fixes must be combined
 
-- the gateway process remains running;
-- outbound sends may later work;
-- the same access token still passes Matrix `whoami`;
-- no new inbound events are dispatched;
-- the log contains `Matrix: permanent auth error ... — stopping sync`;
-- restarting the gateway restores sync with the same token and device.
+Hermes user plugins can register the same platform name. If separate sync-auth and E2EE plugins both register `matrix`, the later registration wins. The process may then load only one correction while the other plugin remains present on disk.
 
-This split state occurs because the Matrix sync coroutine can return while the rest of the gateway remains alive.
+This bundle therefore installs a single plugin named `matrix-sync-auth-fix` that:
 
-## Root cause
+- loads a pinned Matrix adapter containing recipient-verified E2EE key delivery;
+- subclasses that adapter only for structured sync-auth classification; and
+- registers the resulting class as the sole user-owned `matrix` factory.
 
-The affected bundled adapter classifies exceptions by scanning `str(exc).lower()` for any occurrence of:
+Do not install a second user plugin under `plugins/platforms/matrix` alongside this bundle.
 
-```text
-401
-403
-unauthorized
-forbidden
-```
+## Failure mode A: inbound sync stops permanently
 
-That is unsafe for connection wrappers and other free-form messages. Examples that are not proof of Matrix token invalidation include:
+The affected bundled adapter scans free-form exception text for strings such as `401`, `403`, `unauthorized`, `forbidden`, and `unknown_token`. Those strings can appear in transient connection wrappers, proxy messages, request IDs, or human-readable response text without proving that the Matrix token was revoked.
 
-```text
-500 Internal Server Error (request id req-4012ab)
-connection timeout to peer ws-403-prod
-```
+If `_sync_loop()` returns after such a false classification, the gateway can remain alive while Matrix inbound delivery is dead.
 
-Transient DNS, TLS, reverse-proxy, timeout, or connection failures can therefore enter the permanent-auth branch. Once `_sync_loop()` returns, the gateway has no confirmed mechanism that recreates the task, so inbound Matrix sync remains stopped until process replacement.
+The combined override makes only these cases terminal:
 
-The important distinction is:
+- a typed `mautrix.errors.MUnknownToken`;
+- a typed `MatrixRequestError` whose structured `errcode` is exactly `M_UNKNOWN_TOKEN`; or
+- a returned sync error object whose structured `errcode` is exactly `M_UNKNOWN_TOKEN`.
 
-- **trigger:** a transient network, proxy, DNS, timeout, or connection failure;
-- **persistent failure:** free-form exception text is misclassified as terminal authentication failure and the sync task exits.
+Message text and bare HTTP status values never decide terminal authentication state. Ambiguous and transient failures retain the adapter's five-second retry delay.
 
-A `401` in logs is not, by itself, evidence that a Matrix access token was revoked. Confirm token state with a redacted, read-only `/_matrix/client/v3/account/whoami` request.
+## Failure mode B: recipient cannot decrypt a reply
 
-## Correct behavior
+A sender can create a valid `m.room.encrypted` event while current recipient devices never receive its outbound Megolm room key. Persisted outbound sessions and device caches can look usable after reconnect even when no current peer target was reached.
 
-The override retains the bundled adapter's Matrix behavior but changes the terminal classification boundary:
+The pinned adapter from [`../matrix-e2ee-key-delivery/`](../matrix-e2ee-key-delivery/) adds the following fail-closed behavior:
 
-- a typed `mautrix.errors.MUnknownToken` is terminal;
-- a structured `MatrixRequestError` whose `errcode` is exactly `M_UNKNOWN_TOKEN` is terminal;
-- a returned sync error object whose machine-readable `errcode` is exactly `M_UNKNOWN_TOKEN` is terminal;
-- cancellation exits normally;
-- connection wrappers, generic exceptions, and human-readable response messages remain retryable regardless of incidental authentication-like text;
-- non-success response objects that are not `M_UNKNOWN_TOKEN` retry after the existing five-second delay.
+- authoritative encrypted-room state inspection;
+- current joined-user and device refresh;
+- explicit Megolm room-key sharing;
+- recording of actual `(user, device, identity-key)` recipients;
+- persisted outbound-session verification;
+- retry with fresh outbound Olm sessions when recovery is required; and
+- refusal to send when recipients are zero, partial, stale, or invalid.
 
-This favors a visible retry loop over a silent, permanently stopped inbound sync task when the error is ambiguous.
+The same readiness gate covers text, edits, reactions, notices, media, and files. Media upload occurs only after encrypted-room readiness succeeds.
 
 ## Bundle contents
 
-- [`override/platforms/matrix/`](override/platforms/matrix/) — explicitly enabled user platform plugin.
-- [`tests/test_matrix_sync_auth_override.py`](tests/test_matrix_sync_auth_override.py) — focused regression and registration tests.
-- [`verification.md`](verification.md) — compatibility, provenance, and honest verification status.
-
-### How the override is selected
-
-The bundled manifest's discovery key is `matrix-platform`. The user plugin is discovered separately as `platforms/matrix` and must be explicitly enabled. Its registration runs after the bundled platform registration and registers the same platform name, `matrix`; Hermes' plugin ownership ledger replaces the active factory and restores the bundled registration when the user plugin is removed. This is a platform-registry override, not a same-discovery-key manifest collision.
+- [`override/matrix-sync-auth-fix/__init__.py`](override/matrix-sync-auth-fix/__init__.py) — combined registration and structured sync-auth override.
+- [`override/matrix-sync-auth-fix/patched_upstream.py`](override/matrix-sync-auth-fix/patched_upstream.py) — pinned Matrix adapter with recipient-verified key delivery.
+- [`override/matrix-sync-auth-fix/plugin.yaml`](override/matrix-sync-auth-fix/plugin.yaml) — standalone user-plugin manifest.
+- [`override/matrix-sync-auth-fix/tests/`](override/matrix-sync-auth-fix/tests/) — focused sync-auth, registration, provenance, and E2EE wiring tests.
+- [`SHA256SUMS`](SHA256SUMS) — deployable artifact checksums.
+- [`verification.md`](verification.md) — provenance, test-first evidence, hashes, and live-evidence boundaries.
 
 ## Compatibility
 
-The bundle was prepared against:
+This revision is pinned to:
 
-- Hermes Agent `v0.20.6 (2026.8.27)`;
-- Hermes source revision `26350357d76e4508c8df9304a3374bdc5a6f6220`;
+- Hermes Agent `0.21.0`;
+- Hermes source revision `ab9866bc64df48281a2d929dfb1dfd1001973d24`;
 - Mautrix `0.21.1`;
 - Python `3.11`.
 
-It intentionally imports private bundled symbols (`MatrixAdapter` and `_build_adapter`) and reproduces the installed `_sync_loop` control flow around the classifier. Treat it as version-specific.
+`patched_upstream.py` was generated by applying the reviewed `matrix-e2ee-key-delivery/adapter.patch` to that Hermes revision. The wrapper also copies the installed `_sync_loop` control flow because core exposes no narrower classifier hook. Treat both parts as version-specific.
 
-After every Hermes update:
+After every Hermes update, do **not** assume this artifact remains compatible. Reapply the E2EE patch to the exact new adapter, update the pinned revision, rerun both focused suites, run plugin doctor, and verify a fresh external encrypted round trip before activation.
 
-1. compare the installed bundled `_sync_loop` with this override;
-2. run plugin doctor;
-3. rerun the focused tests with the updated Hermes virtual environment;
-4. verify the override marker and a live Matrix sync before relying on it.
+## Install or upgrade
 
-Do not install the bundle if another user plugin already owns `platforms/matrix` until the two overrides have been reconciled.
-
-## Install
-
-Set `HERMES_HOME` to the exact profile home used by the target gateway. The default profile usually uses `$HOME/.hermes`; other profiles have separate homes.
+Set `HERMES_HOME` to the exact profile home used by the target gateway:
 
 ```bash
 export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 export FIX_BUNDLE="/path/to/hermes-agent-fixes/fixes/matrix-sync-auth-recovery"
+export TARGET="$HERMES_HOME/plugins/matrix-sync-auth-fix"
 ```
 
-### 1. Check for an existing user override
+### 1. Back up the current user plugin
+
+Keep backups outside `$HERMES_HOME/plugins`, because every manifest below that directory is discoverable:
 
 ```bash
-test ! -e "$HERMES_HOME/plugins/platforms/matrix" || {
-  printf '%s\n' 'A user Matrix plugin already exists; inspect and reconcile it first.'
-  exit 1
-}
+if test -e "$TARGET"; then
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$HERMES_HOME/plugin-backups"
+  cp -R "$TARGET" \
+    "$HERMES_HOME/plugin-backups/matrix-sync-auth-fix-$stamp"
+fi
 ```
 
-### 2. Copy only the override package
+Do not copy `.env`, session state, access tokens, recovery material, or Matrix crypto files into the plugin directory.
+
+### 2. Remove the obsolete competing override
+
+If `$HERMES_HOME/plugins/platforms/matrix` exists, inspect and back it up outside plugin discovery, then remove it from the discovery tree. Do not run two user Matrix owners.
+
+### 3. Install the combined plugin
 
 ```bash
-mkdir -p "$HERMES_HOME/plugins/platforms"
-cp -R "$FIX_BUNDLE/override/platforms/matrix" \
-  "$HERMES_HOME/plugins/platforms/matrix"
+rm -rf "$TARGET"
+mkdir -p "$HERMES_HOME/plugins"
+cp -R "$FIX_BUNDLE/override/matrix-sync-auth-fix" "$TARGET"
 ```
 
-Do not copy `.env`, session state, or Matrix crypto files into the plugin directory.
+### 4. Validate and enable it
 
-### 3. Validate and enable it
+Use the interpreter and CLI from the exact Hermes install:
 
 ```bash
-hermes plugins doctor "$HERMES_HOME/plugins/platforms/matrix" --ci
-hermes plugins enable platforms/matrix --no-allow-tool-override
+hermes plugins doctor "$TARGET" --ci
+hermes plugins enable matrix-sync-auth-fix --no-allow-tool-override
 hermes plugins list
 ```
 
-Expected discovery state:
+Expected relevant discovery state:
 
 ```text
-matrix-platform  enabled  ...  user
+matrix-platform       not enabled  bundled
+matrix-sync-auth-fix  enabled      user
 ```
 
-A platform adapter does not need permission to replace Hermes' built-in tools.
+A platform adapter does not need permission to replace Hermes built-in tools.
 
-### 4. Run the focused regression
-
-Run `hermes --version`, copy its reported **Install directory** into `HERMES_CHECKOUT`, and use that checkout's virtual environment. `HERMES_HOME` is profile state and is not the checkout path for named profiles.
+### 5. Run the focused plugin suite
 
 ```bash
-hermes --version
-export HERMES_CHECKOUT="/absolute/install/directory/reported/above"
-cd "$HERMES_CHECKOUT"
-"$HERMES_CHECKOUT/venv/bin/python" -m pytest \
-  "$FIX_BUNDLE/tests/test_matrix_sync_auth_override.py" -q
+HERMES_CHECKOUT="/absolute/Hermes/install/directory"
+cd "$TARGET"
+"$HERMES_CHECKOUT/venv/bin/python" -m pytest tests -q
 ```
 
-### 5. Load the plugin
+For a new Hermes release, also apply and run the Matrix-focused tests in `../matrix-e2ee-key-delivery/tests.patch` against a disposable worktree before generating a replacement `patched_upstream.py`.
 
-Configuration and tests are only **prepared** state. Replace the supervised gateway process through Hermes' supported service command:
+### 6. Activate exactly once
+
+At this point the fix is only **prepared**. Replace the supervised gateway process through Hermes' supported service command:
 
 ```bash
 hermes gateway status
 hermes gateway restart
 ```
 
-For a Linux system-level gateway service, preserve the service scope instead:
+Use `hermes gateway restart --all` only when an intentional hard restart of every profile on that host has been authorized. It terminates work rather than waiting for the normal drain window.
+
+Operators who need a bounded normal restart can configure the supported drain policy rather than wrapping the CLI in an external timeout. For example:
 
 ```bash
-hermes gateway status --system
-hermes gateway restart --system
+hermes config set agent.restart_after_turn_timeout 120
+hermes config set agent.restart_drain_timeout 0
 ```
 
-If `hermes gateway status` says the service definition is stale and gives a different remediation command, follow that exact command so the service definition is refreshed as well as the process.
+The CLI wait budget is `restart_after_turn_timeout + restart_drain_timeout + 15s`; the example therefore caps the normal restart wait at 135 seconds. Cron work keeps its separate `agent.cron_drain_timeout` protection.
 
-## Live verification
+## Loaded and live verification
 
-Do not call the installation successful from plugin doctor, tests, startup logs, or an HTTP `200` alone. Verify all applicable items:
+Do not call the deployment successful from tests, plugin doctor, a new PID, startup logs, or an HTTP `200` alone.
 
-- [ ] `hermes plugins list` reports the Matrix plugin as `enabled` and source `user`.
-- [ ] The supervised gateway has a new process ID after activation.
-- [ ] The log contains `matrix-sync-auth-type-aware-v2` from the user plugin module.
-- [ ] Matrix authentication resolves the expected user and device without printing the token.
-- [ ] Matrix initial sync completes and the gateway reports Matrix connected.
-- [ ] The same process remains alive beyond at least one 45-second sync guard interval.
-- [ ] The process retains active Matrix transport and logs no new terminal-auth/import failure.
-- [ ] A fresh inbound message from another Matrix account is dispatched.
-- [ ] For encrypted rooms, the recipient can decrypt the fresh reply.
+### Loaded evidence
 
-The final two items require an external Matrix client. Do not synthesize or backfill them from startup output.
+Require all of the following:
+
+- [ ] `matrix-sync-auth-fix` is `enabled` from source `user`.
+- [ ] The supervised gateway has a new PID.
+- [ ] The log contains `matrix-e2ee-recipient-enforced-v1+matrix-sync-auth-type-aware-v2`.
+- [ ] The logged base revision matches the pinned artifact.
+- [ ] E2EE initializes with the expected existing device and protected crypto store.
+- [ ] Matrix initial sync completes and the platform reports connected.
+- [ ] No duplicate Matrix client owns the same token/device.
+
+### External live evidence
+
+From a different Matrix client, send a fresh short message in an encrypted room and require:
+
+- [ ] inbound decryption and room/session routing;
+- [ ] agent completion;
+- [ ] `prepared Megolm key share ... to N device target(s)` with `N > 0`;
+- [ ] an encrypted sent event;
+- [ ] a visibly decrypted reply on the recipient client.
+
+The final item cannot be synthesized from sender-side logs.
 
 ## Rollback
 
-The bundled plugin key (`matrix-platform`) and user plugin key (`platforms/matrix`) are distinct. Do not merely rename the directory inside `$HERMES_HOME/plugins`; Hermes still discovers plugin manifests under that root. Also do not run `hermes plugins disable platforms/matrix` during this rollback: on the target Hermes version, that command leaves the displayed Matrix platform disabled after the user manifest is removed.
-
-Move the user plugin completely outside the plugin discovery tree. The dormant `platforms/matrix` enable entry is harmless while no user manifest exists and makes restoring the backup explicit and reversible:
+This behavior was verified in an isolated Hermes `0.21.0` home: after removing the user plugin, the bundled platform remains `not enabled` until it is explicitly enabled.
 
 ```bash
 export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
-export BACKUP_DIR="$HERMES_HOME/plugin-backups/matrix-sync-auth-type-aware-v2"
-
-test ! -e "$BACKUP_DIR" || {
-  printf '%s\n' "Backup already exists: $BACKUP_DIR"
-  exit 1
-}
+export TARGET="$HERMES_HOME/plugins/matrix-sync-auth-fix"
+export BACKUP_DIR="$HERMES_HOME/plugin-backups/disabled-matrix-sync-auth-fix"
 
 mkdir -p "$HERMES_HOME/plugin-backups"
-mv "$HERMES_HOME/plugins/platforms/matrix" "$BACKUP_DIR"
+mv "$TARGET" "$BACKUP_DIR"
+hermes plugins enable matrix-platform --no-allow-tool-override
 hermes plugins list
 hermes gateway restart
 ```
 
-For a Linux system-level gateway service, use `hermes gateway restart --system` for the final command.
-
-Before restarting, confirm `hermes plugins list` reports `matrix-platform` from source `bundled` and no user Matrix plugin. Rollback does not require token rotation or crypto-store deletion.
+Before restarting, confirm `matrix-platform` is `enabled` from source `bundled` and no user Matrix plugin is discovered. Rollback does not require token rotation, device replacement, or crypto-store deletion.
 
 ## Security invariants
 
-- Never commit or print Matrix access tokens, passwords, recovery keys, room keys, cookies, authorization headers, or private homeserver URLs.
+- Never commit or print Matrix access tokens, passwords, recovery keys, room keys, cookies, authorization headers, private homeserver URLs, or crypto-store content.
 - Preserve the existing Matrix device identity and crypto database.
-- Do not weaken sender/room allowlists or E2EE mode to make the test pass.
+- Keep the crypto database and its backups mode `0600`.
+- Do not weaken sender/room authorization or E2EE mode to make a test pass.
 - Do not run two Matrix clients with the same token/device concurrently.
-- Do not grant built-in tool-override permission to this platform plugin.
-- Keep retries bounded by the adapter's existing delay; do not add a busy loop.
-- Treat a future incompatibility with bundled private symbols as a fail-closed plugin load error, not a reason to edit the live Hermes checkout blindly.
+- Fail closed on zero or partial recipient key delivery.
+- Keep retries bounded; do not add a busy loop.
+- Keep Hermes core untouched; update the user-plugin artifact and this repository instead.
