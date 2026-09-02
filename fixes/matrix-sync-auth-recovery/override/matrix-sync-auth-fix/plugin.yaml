@@ -1,0 +1,29 @@
+name: matrix-sync-auth-fix
+label: Matrix E2EE recipient and sync-auth fix
+kind: standalone
+version: 2.0.0
+description: >
+  Provides a single Matrix platform override with structured sync-auth
+  classification and recipient-verified Megolm delivery. It classifies
+  permanent sync auth failures only from typed/structured M_UNKNOWN_TOKEN,
+  never from free-form message text or HTTP status alone.
+
+  The bundled adapter's substring test false-positives on ordinary transport
+  errors: aiohttp embeds the full request URL in timeout messages, mautrix
+  rewraps any ClientError as MatrixConnectionError, and the sync URL carries
+  ?since=<next_batch> whose Synapse stream ordinals can contain "401" or
+  "403" by pure counter arithmetic. A plain network timeout was therefore
+  misread as a revoked token and the sync loop was killed permanently, with
+  no supervisor to restart it — the agent went silent until a manual restart.
+
+  The plugin re-registers the "matrix" platform with a sibling-pinned adapter
+  that verifies Megolm recipients before encrypted sends and overrides
+  _sync_loop() with the corrected classification. Hermes core stays byte-for-byte
+  stock; no duplicate platform directory is required.
+author: Karsten Samaschke
+# NOTE: deliberately NO `requires_plugins: [matrix-platform]`.
+# The bundled Matrix platform is registered lazily and is not present in
+# `plugins.enabled` (bundled platforms auto-load and are never listed there),
+# so declaring the dependency produces a permanent bogus "not enabled/installed"
+# warning on every discovery. The dependency is real but is resolved at runtime
+# through the sibling-pinned adapter — see `_patched_upstream()` in __init__.py.

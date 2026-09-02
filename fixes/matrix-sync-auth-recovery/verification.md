@@ -2,109 +2,179 @@
 
 ## Source and compatibility
 
-The override was extracted from a live diagnosis of Hermes Matrix sync recovery and then converted into a portable, explicitly enabled user-plugin bundle.
+This bundle combines two previously independent Matrix corrections into one user-owned platform registration.
 
-- Hermes Agent: `v0.20.6 (2026.8.27)`
-- Hermes source revision: `26350357d76e4508c8df9304a3374bdc5a6f6220`
+- Hermes Agent: `0.21.0`
+- Hermes source revision: `ab9866bc64df48281a2d929dfb1dfd1001973d24`
 - Mautrix: `0.21.1`
 - Python: `3.11`
-- Target code area: `plugins/platforms/matrix/adapter.py::_sync_loop`
-- Bundled plugin discovery key: `matrix-platform`
-- User plugin discovery key: `platforms/matrix`
+- User plugin key: `matrix-sync-auth-fix`
 - Replaced platform registry name: `matrix`
+- E2EE source bundle: [`../matrix-e2ee-key-delivery/`](../matrix-e2ee-key-delivery/)
 
-No credential, account ID, room ID, deployment-specific homeserver hostname or IP address, recovery material, or crypto-store content is included in this repository. The manifest retains the public default example `https://matrix.org`.
+No credential, account ID, room ID, deployment-specific homeserver hostname or IP address, recovery material, or crypto-store content is included in this repository.
 
 ## Root-cause evidence
 
-The investigation established these independent facts:
+The investigation established three independent facts:
 
-1. Current DNS and Matrix API reachability were healthy during verification.
-2. The existing access token returned `200` from Matrix `whoami` and identified the expected account/device.
-3. Historical gateway logs showed transient timeout/DNS/connection errors before one `MatrixConnectionError` entered the permanent-auth branch.
-4. The same token/device authenticated and synchronized successfully after process replacement.
-5. The bundled `_sync_loop` used unanchored free-form substring checks for `401`, `403`, `unauthorized`, and `forbidden`.
-6. The sync coroutine returned on that classification, while other gateway facilities could remain alive.
-7. A focused harness reproduced the false stop with unrelated `401`/`403` digits in `MatrixConnectionError` messages.
+1. The bundled sync loop can terminate on free-form authentication-like text even when no structured `M_UNKNOWN_TOKEN` signal exists.
+2. A Matrix sender can emit a valid encrypted event while no current peer device has verifiably received the corresponding outbound Megolm room key.
+3. Two user plugins that both register `matrix` do not compose: the later registration replaces the earlier factory. The process can therefore retain only one correction even while both plugin directories exist.
 
-The exact historical substring inside the one classified connection exception was not retained in the sanitized log. No claim is made about which of the four strings matched. The persistent failure mechanism is nevertheless deterministic and reproduced; a genuinely revoked token is contradicted by successful `whoami` and later synchronization with the same credentials.
+The durable fix is one plugin that loads the recipient-enforcing adapter and then applies the structured sync-auth subclass to that exact base class.
 
 ## Test-first evidence
 
-Before the override existed, the regression harness exercised the bundled adapter and failed both transport cases:
+### E2EE adapter patch
+
+The E2EE regression patch was applied first to a disposable worktree at the pinned Hermes revision.
+
+RED, before the adapter implementation patch:
 
 ```text
-2 failed
-attempts: expected 2, observed 1
-logged: Matrix: permanent auth error ... — stopping sync
+ImportError: cannot import name '_build_hermes_olm_machine'
+3 collection errors
+RED_EXIT_STATUS=2
 ```
 
-After installing the override, the focused suite passed:
+GREEN, after applying the adapter patch:
 
 ```text
-4 passed in 0.12s
+139 passed
+GREEN_EXIT_STATUS=0
 ```
 
-The portable repository suite expands coverage to include:
+This suite covers persisted outbound sessions, device refresh, zero and partial recipients, retry behavior, encrypted state failure, media ordering, and room-key request preservation.
 
-- transport errors containing unrelated `401` and `403` digits;
-- free-form `unauthorized` and `forbidden` text;
-- typed `MUnknownToken` terminal behavior;
-- structured sync-response `M_UNKNOWN_TOKEN` terminal behavior;
-- response messages containing `unknown_token` with absent or conflicting errcodes remaining retryable after the existing five-second delay;
-- direct cancellation without retry delay;
-- override factory registration and restoration of the upstream module global on success and failure;
-- isolated CLI discovery, explicit enablement, and rollback to the bundled platform.
+### Combined plugin wiring
 
-The bundle gate produced:
+The initial combined wiring suite exposed four loader/closure failures before the wrapper was corrected:
 
 ```text
-Portable focused suite: 12 passed in 1.14s
-Plugin doctor: passed discovery, manifest parsing, import, and registration
-Isolated install/discovery: user Matrix plugin resolved as enabled
-Isolated rollback: bundled Matrix plugin restored as enabled, no user plugin discovered
+4 failed, 22 passed
+```
+
+After wiring the pinned adapter through the existing plugin owner:
+
+```text
+26 passed
+```
+
+### Structured sync-auth v2 correction
+
+A follow-up review found two remaining free-form decision paths: returned response message text and bare HTTP status. Four tests were added first.
+
+RED:
+
+```text
+4 failed, 28 passed
+```
+
+The failures proved that incidental `unknown_token` text and untyped `401`/`403` values could still stop sync.
+
+GREEN after restricting terminal behavior to typed or structured `M_UNKNOWN_TOKEN`:
+
+```text
+32 passed
+```
+
+### Max-message-length drift guard
+
+A pre-push review found that the registration mirrored `DEFAULT_MAX_MESSAGE_LENGTH` while only claiming to verify it. A fail-closed regression was added first.
+
+RED:
+
+```text
+1 failed: DID NOT RAISE RuntimeError
+```
+
+GREEN after checking the sibling-pinned constant before adapter construction:
+
+```text
+1 passed
+33 passed in the full focused suite
+```
+
+## Final prepared gate
+
+The final artifact produced:
+
+```text
+Focused plugin suite: 33 passed
+Plugin Doctor: runtime discovery, manifest parsing, import, and registration passed
 Python compilation: passed
-git diff --check: passed
+Credential-literal scan: 0 token, 0 bearer, 0 private-key matches
+Hermes checkout worktree diff: clean
+Hermes checkout index diff: clean
+Crypto backup SQLite integrity: ok
+Live and backup crypto-store modes: 0600
 ```
 
-## Initial v1 prepared verification
+The E2EE adapter and tests patches both passed `git apply --check` against the pinned Hermes revision before the disposable worktree was created.
 
-The live-tested user plugin produced:
+## Final artifact hashes
 
 ```text
-Plugin Doctor: OK
-runtime discovery, manifest parsing, import, and registration passed
-matrix-platform: enabled, source user
-focused regression: 4 passed
-Hermes checkout: no local source changes
+004cea8bdffcd84509f9bf12602f02abf0932b65891b2b19466f0adaaa349e89  override/matrix-sync-auth-fix/__init__.py
+33accf06888b7c586effa271a2c64f2120344a9ce9314e84f7851aa570400a0e  override/matrix-sync-auth-fix/patched_upstream.py
+ff0756ce1aa58d4a451795c4c7cd2ebd7c3e5a8122d5a5743c317377c0546aea  override/matrix-sync-auth-fix/plugin.yaml
+a2112d2083099f5fa57195ef0ac3ecdd2838644c011ca3da0f28cc1645d2b879  override/matrix-sync-auth-fix/tests/test_matrix_sync_auth_classification.py
 ```
 
-## Initial v1 loaded verification
+## Isolated discovery and rollback
 
-After the supported supervised-service refresh:
+A temporary, isolated Hermes home confirmed the exact `0.21.0` lifecycle:
 
-- the gateway process was replaced;
-- the service definition matched the installed Hermes runtime;
-- the log identified the user-plugin module and marker `matrix-sync-auth-type-aware-v1`;
-- Matrix initial sync completed across the joined rooms;
-- the gateway reported Matrix connected.
+```text
+enabled_user=[('matrix-platform', 'not enabled', 'bundled'),
+              ('matrix-sync-auth-fix', 'enabled', 'user')]
+after_move=[('matrix-platform', 'not enabled', 'bundled')]
+after_bundled_enable=[('matrix-platform', 'enabled', 'bundled')]
+```
 
-That live process loaded the initial `1.0.1` / `matrix-sync-auth-type-aware-v1` variant. Review of the reusable bundle then found that human-readable response-message text could still be misclassified. The final `1.0.2` / `matrix-sync-auth-type-aware-v2` bundle removes that fallback and is covered by the 12-case portable suite. It was not reloaded into the live gateway during this repository publication workflow, so no final-v2 live activation is claimed here.
+This is why rollback documentation explicitly enables `matrix-platform` after moving the user plugin outside discovery.
 
-## Live verification
+## Activation evidence
 
-For the initial v1 deployment, more than two minutes after connection—longer than two 45-second sync guards—the same gateway child process remained alive with an established TLS connection to the Matrix homeserver. A fresh redacted `whoami` still returned `200`, and no post-load permanent-auth, sync, dependency, import, or adapter-creation error was present.
+The prepared artifact was activated through the supervised Hermes service path. The previous process did not complete graceful shutdown and was intentionally replaced through the authorized hard-restart path.
 
-A fresh external encrypted message/reply was **not** generated during this verification. Recipient-visible decryption and full inbound-agent-outbound behavior therefore remain deployment acceptance items, not claimed evidence.
+The replacement process then produced all of the following loaded evidence:
+
+```text
+combined marker: matrix-e2ee-recipient-enforced-v1+matrix-sync-auth-type-aware-v2
+base revision: ab9866bc64df
+E2EE: enabled with the existing device and protected crypto store
+initial sync: completed
+platform reconnect: successful after bounded retries
+```
+
+The Hermes checkout remained clean and the user plugin remained the single enabled Matrix owner.
+
+This establishes **loaded and connected**.
+
+## External live evidence
+
+A fresh probe supplied from an external Matrix client completed the full encrypted path:
+
+- the gateway decrypted and routed the exact probe in an authoritatively encrypted Megolm room;
+- the current joined-peer device set was non-empty, every eligible target had an identity key, and no eligible target was deleted or blacklisted;
+- the guarded text-send path completed encrypted-room readiness before the event was emitted;
+- the gateway produced the agent response and logged the following sent event; and
+- the external recipient explicitly confirmed that the reply was visible and decryptable.
+
+No private room, user, device, homeserver, host, event, or session identifier is included in this evidence. The final recipient-visible result is based on the external client confirmation, not inferred from startup, tests, sender-side event IDs, or an HTTP status.
 
 ## Review focus
 
 Review this bundle specifically for:
 
-- whether every terminal path is backed by structured `M_UNKNOWN_TOKEN` evidence;
-- accidental restoration of free-form auth substring matching;
-- drift from the target bundled `_sync_loop` control flow;
-- cancellation and retry behavior;
-- registration factory restoration;
-- secrets, live identifiers, or unsafe crypto-store advice;
-- compatibility claims that exceed the stated Hermes/Mautrix versions.
+- any return of free-form authentication substring matching;
+- terminal handling without typed or structured `M_UNKNOWN_TOKEN` evidence;
+- adapter provenance drift from the pinned Hermes revision;
+- zero or partial recipient sends that do not fail closed;
+- media upload before encrypted-room readiness;
+- duplicate Matrix platform registration;
+- cancellation and bounded retry behavior;
+- secrets, live identifiers, or unsafe crypto-store guidance; and
+- compatibility claims beyond the stated Hermes/Mautrix versions.

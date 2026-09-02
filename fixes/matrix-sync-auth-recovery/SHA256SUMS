@@ -1,0 +1,4 @@
+004cea8bdffcd84509f9bf12602f02abf0932b65891b2b19466f0adaaa349e89  override/matrix-sync-auth-fix/__init__.py
+33accf06888b7c586effa271a2c64f2120344a9ce9314e84f7851aa570400a0e  override/matrix-sync-auth-fix/patched_upstream.py
+ff0756ce1aa58d4a451795c4c7cd2ebd7c3e5a8122d5a5743c317377c0546aea  override/matrix-sync-auth-fix/plugin.yaml
+a2112d2083099f5fa57195ef0ac3ecdd2838644c011ca3da0f28cc1645d2b879  override/matrix-sync-auth-fix/tests/test_matrix_sync_auth_classification.py
