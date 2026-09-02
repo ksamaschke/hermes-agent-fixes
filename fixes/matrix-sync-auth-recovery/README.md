@@ -51,6 +51,10 @@ The pinned adapter from [`../matrix-e2ee-key-delivery/`](../matrix-e2ee-key-deli
 
 The same readiness gate covers text, edits, reactions, notices, media, and files. Media upload occurs only after encrypted-room readiness succeeds.
 
+### Startup lifecycle
+
+After the initial Matrix sync succeeds, E2EE key sharing and encrypted-room reconciliation run as one managed background task. They must not block the gateway's platform-readiness return: a slow homeserver or an empty one-time-key response must not make the Matrix connector look dead or trigger the reconnect loop. The task is retained and cancelled during adapter disconnect. The per-send `_ensure_encrypted_room_ready()` guard remains synchronous and fail-closed, so no encrypted event bypasses recipient verification while background setup is still running.
+
 ## Bundle contents
 
 - [`override/matrix-sync-auth-fix/__init__.py`](override/matrix-sync-auth-fix/__init__.py) — combined registration and structured sync-auth override.

@@ -418,3 +418,68 @@ def test_single_plugin_registration_needs_no_duplicate_matrix_directory():
 
     assert registration["name"] == "matrix"
     assert not (ADAPTER.parent.parent / "platforms" / "matrix").exists()
+
+
+@pytest.mark.asyncio
+async def test_e2ee_reconciliation_is_scheduled_without_blocking_readiness():
+    module, _registration, _nonlocals = _load_plugin_registration()
+    release = asyncio.Event()
+
+    class BaseAdapter:
+        async def _reconcile_encrypted_rooms_before_ready(self):
+            await release.wait()
+            return True
+
+    adapter_cls = module._build_patched_class(BaseAdapter)
+    adapter = adapter_cls.__new__(adapter_cls)
+    adapter._client = SimpleNamespace(crypto=None)
+    adapter._encryption = True
+    adapter._e2ee_recipient_enforcement_active = True
+    adapter._e2ee_readiness_tasks = set()
+
+    task = adapter._schedule_e2ee_readiness()
+    await asyncio.sleep(0)
+
+    assert not task.done()
+    assert task in adapter._e2ee_readiness_tasks
+
+    release.set()
+    assert await task is True
+    await asyncio.sleep(0)
+    assert task not in adapter._e2ee_readiness_tasks
+
+
+@pytest.mark.asyncio
+async def test_e2ee_readiness_backgrounds_initial_key_share_before_reconciliation():
+    module, _registration, _nonlocals = _load_plugin_registration()
+    release = asyncio.Event()
+    calls = []
+
+    class Crypto:
+        async def share_keys(self):
+            calls.append("share")
+            await release.wait()
+
+    class BaseAdapter:
+        async def _reconcile_encrypted_rooms_before_ready(self):
+            calls.append("reconcile")
+            return True
+
+    adapter_cls = module._build_patched_class(BaseAdapter)
+    adapter = adapter_cls.__new__(adapter_cls)
+    adapter._client = SimpleNamespace(crypto=Crypto())
+    adapter._encryption = True
+    adapter._e2ee_recipient_enforcement_active = True
+    adapter._matrix_request_timeout_seconds = 1
+    adapter._e2ee_readiness_tasks = set()
+
+    task = adapter._schedule_e2ee_readiness()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert calls == ["share"]
+    assert not task.done()
+
+    release.set()
+    assert await task is True
+    assert calls == ["share", "reconcile"]

@@ -2400,20 +2400,10 @@ class MatrixAdapter(BasePlatformAdapter):
         # a no-op through the lifecycle fence.
         self._matrix_client_connected = True
 
-        # Share keys after initial sync if E2EE is enabled.
+        # Initial sync is enough for gateway readiness. E2EE key sharing and
+        # recipient reconciliation continue in a task owned by disconnect().
         if self._encryption and getattr(client, "crypto", None):
-            try:
-                await asyncio.wait_for(
-                    client.crypto.share_keys(),
-                    timeout=getattr(self, "_matrix_request_timeout_seconds", 45.0),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Matrix: initial key share failed (%s)",
-                    type(exc).__name__,
-                )
-            if self._e2ee_recipient_enforcement_active:
-                await self._reconcile_encrypted_rooms_before_ready()
+            getattr(self, "_schedule_e2ee_readiness")()
 
         # Start the sync loop.
         self._sync_task = asyncio.create_task(self._sync_loop())

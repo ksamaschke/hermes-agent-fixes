@@ -96,12 +96,29 @@ GREEN after checking the sibling-pinned constant before adapter construction:
 33 passed in the full focused suite
 ```
 
+### Connect-readiness lifecycle correction
+
+The live reconnect investigation found that initial E2EE key sharing and the
+encrypted-room reconciliation pass were awaited before the Matrix adapter
+returned from `connect()`. A slow or temporarily empty key response could
+therefore exhaust the gateway's platform-connect budget even after initial
+sync had completed. The corrected adapter schedules both operations in one
+tracked task; the existing per-send recipient-verification guard remains
+unchanged and fail-closed.
+
+The regression tests cover task ownership, non-blocking readiness, key-share
+ordering, reconciliation ordering, and cleanup:
+
+```text
+35 passed in 0.31s
+```
+
 ## Final prepared gate
 
 The final artifact produced:
 
 ```text
-Focused plugin suite: 33 passed
+Focused plugin suite: 35 passed
 Plugin Doctor: runtime discovery, manifest parsing, import, and registration passed
 Python compilation: passed
 Credential-literal scan: 0 token, 0 bearer, 0 private-key matches
@@ -116,10 +133,10 @@ The E2EE adapter and tests patches both passed `git apply --check` against the p
 ## Final artifact hashes
 
 ```text
-004cea8bdffcd84509f9bf12602f02abf0932b65891b2b19466f0adaaa349e89  override/matrix-sync-auth-fix/__init__.py
-33accf06888b7c586effa271a2c64f2120344a9ce9314e84f7851aa570400a0e  override/matrix-sync-auth-fix/patched_upstream.py
+d7aa8314442ed57ee90afd189bd5267b41433e46ea003f034b6f7c84c1f1e12d  override/matrix-sync-auth-fix/__init__.py
+6f8e135b1b471c3734f65f5842eee8a744c62a446467778f98c33936368e5eda  override/matrix-sync-auth-fix/patched_upstream.py
 ff0756ce1aa58d4a451795c4c7cd2ebd7c3e5a8122d5a5743c317377c0546aea  override/matrix-sync-auth-fix/plugin.yaml
-a2112d2083099f5fa57195ef0ac3ecdd2838644c011ca3da0f28cc1645d2b879  override/matrix-sync-auth-fix/tests/test_matrix_sync_auth_classification.py
+e20371e726b9fe16a2700b4a507c501f43f305d1c26940421d76aa8bbc087c1e  override/matrix-sync-auth-fix/tests/test_matrix_sync_auth_classification.py
 ```
 
 ## Isolated discovery and rollback
@@ -137,7 +154,7 @@ This is why rollback documentation explicitly enables `matrix-platform` after mo
 
 ## Activation evidence
 
-The prepared artifact was activated through the supervised Hermes service path. The previous process did not complete graceful shutdown and was intentionally replaced through the authorized hard-restart path.
+The prepared artifact was activated through the supervised Hermes service path. The previous process did not complete graceful shutdown and was intentionally replaced through the authorized hard-restart path. The activation also exercised the bounded path for a restart with an interrupted in-flight turn; no crypto store or device identity was reset.
 
 The replacement process then produced all of the following loaded evidence:
 
@@ -151,7 +168,9 @@ platform reconnect: successful after bounded retries
 
 The Hermes checkout remained clean and the user plugin remained the single enabled Matrix owner.
 
-This establishes **loaded and connected**.
+This establishes **loaded and connected**. The post-fix startup returned from
+the Matrix connect path after initial sync instead of waiting for E2EE
+reconciliation to finish.
 
 ## External live evidence
 
@@ -164,6 +183,13 @@ A fresh probe supplied from an external Matrix client completed the full encrypt
 - the external recipient explicitly confirmed that the reply was visible and decryptable.
 
 No private room, user, device, homeserver, host, event, or session identifier is included in this evidence. The final recipient-visible result is based on the external client confirmation, not inferred from startup, tests, sender-side event IDs, or an HTTP status.
+
+The later lifecycle correction did not weaken the send guard. Its sender-side
+activation observation showed a fresh inbound Matrix event followed by a sent
+response after the replacement gateway reached connected state. This is
+transport evidence only; a new recipient-visible decrypt confirmation must
+still be obtained from an independent Matrix client before claiming a new
+external E2EE round trip for this revision.
 
 ## Review focus
 

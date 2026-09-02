@@ -138,6 +138,43 @@ def _build_patched_class(base_adapter_cls):
     class PatchedMatrixAdapter(_MatrixBaseAdapter):  # type: ignore[misc,valid-type]
         """Pinned Matrix adapter with transport-safe auth classification."""
 
+        async def _run_e2ee_readiness(self) -> bool:
+            """Finish E2EE setup without blocking Matrix readiness."""
+            try:
+                client = getattr(self, "_client", None)
+                crypto = getattr(client, "crypto", None)
+                if getattr(self, "_encryption", False) and crypto:
+                    try:
+                        await asyncio.wait_for(
+                            crypto.share_keys(),
+                            timeout=getattr(
+                                self, "_matrix_request_timeout_seconds", 45.0
+                            ),
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Matrix: initial key share failed (%s)",
+                            type(exc).__name__,
+                        )
+                if getattr(self, "_e2ee_recipient_enforcement_active", False):
+                    return await self._reconcile_encrypted_rooms_before_ready()
+                return True
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error(
+                    "Matrix: background encrypted-room reconciliation failed (%s)",
+                    type(exc).__name__,
+                )
+                return False
+
+        def _schedule_e2ee_readiness(self):
+            """Schedule E2EE reconciliation and retain it for orderly shutdown."""
+            task = asyncio.create_task(self._run_e2ee_readiness())
+            self._e2ee_readiness_tasks.add(task)
+            task.add_done_callback(self._e2ee_readiness_tasks.discard)
+            return task
+
         async def _sync_loop(self) -> None:
             """Continuously sync with the homeserver.
 
