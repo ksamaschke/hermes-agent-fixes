@@ -1,0 +1,14 @@
+name: matrix-share-verify
+version: 1.0.0
+description: |
+  Re-verifies restored Megolm room key shares before trusting them.
+  Mautrix marks an outbound session shared even when it silently skipped
+  devices that had no usable Olm channel ("We don't care about missing keys at
+  this point"), so the session is persisted with shared=1 while the peer never
+  received the key. The Matrix E2EE plugin verifies shares and fails closed,
+  but short-circuits on an in-process cache; after a restart the first send per
+  room fills that cache from the database, so a session mis-shared before the
+  restart is never re-examined and stays undeliverable for the life of the
+  process. This forces one verification per room per process, letting the
+  adapter's existing fail-closed check re-share when devices were missed.
+author: ksamaschke/hermes-agent-fixes
