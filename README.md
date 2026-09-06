@@ -7,6 +7,7 @@ This is **not** the upstream fork. The regularly synchronized source fork is [`k
 ## Contents
 
 - [`fixes/matrix-e2ee-key-delivery/`](fixes/matrix-e2ee-key-delivery/) — explanation and optional patch for Matrix E2EE room-key delivery after reconnects.
+- [`fixes/matrix-room-key-recovery/`](fixes/matrix-room-key-recovery/) — user plugin that requests missing Megolm room keys instead of silently dropping undecryptable messages.
 - [`fixes/matrix-sync-auth-recovery/`](fixes/matrix-sync-auth-recovery/) — combined user plugin for recipient-verified Matrix E2EE key delivery and structured sync-auth recovery.
 
 Each fix directory should contain:

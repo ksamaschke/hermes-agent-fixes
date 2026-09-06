@@ -1,0 +1,14 @@
+name: matrix-key-recovery
+label: Matrix Key Recovery
+kind: extension
+version: 1.0.0
+description: >
+  Requests missing Megolm room keys instead of silently dropping messages.
+  mautrix's DecryptionDispatcher logs a warning and discards any event it
+  cannot decrypt, with no key request and no retry, so a single gap in key
+  delivery makes the agent permanently deaf in that session while the
+  gateway still looks healthy. This wraps the dispatcher: on SessionNotFound
+  it calls the m.room_key_request flow mautrix already ships, waits briefly
+  for a peer to forward the session, then retries and dispatches the event
+  through the normal path.
+author: ksamaschke/hermes-agent-fixes
