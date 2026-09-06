@@ -1,0 +1,14 @@
+name: matrix-sas-verification
+label: Matrix SAS Verification
+kind: extension
+version: 1.0.0
+description: >
+  Answers interactive emoji (SAS) verification so a human can verify the
+  agent's Matrix device from Element. A bot has no screen and cannot confirm
+  a verification itself, so without a responder the flow started from a client
+  simply times out and the device stays unverified. This registers the
+  responder side of the m.sas.v1 flow on the live client, over both the
+  to-device transport and the in-room transport used by Element X. In-room
+  verification events are sent unencrypted, as the flow requires. Nothing in
+  the Hermes checkout is patched and the crypto store is never touched.
+author: ksamaschke/hermes-agent-fixes

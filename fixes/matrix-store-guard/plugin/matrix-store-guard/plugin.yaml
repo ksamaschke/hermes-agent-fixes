@@ -1,0 +1,14 @@
+name: matrix-store-guard
+label: Matrix Store Guard
+kind: extension
+version: 1.0.0
+description: >
+  Keeps each profile's Matrix crypto store limited to its own Olm account.
+  Crossed profile wiring can leave another agent's Olm account behind in a
+  store; that orphan shares the real account's matrix device and keeps
+  publishing and rotating one-time keys for it, so peers claim keys the live
+  account cannot use. Room keys are then never delivered and messages stay
+  undecryptable while the gateway still reports healthy. This removes foreign
+  account rows at startup, before the crypto store is opened. Sessions,
+  devices and keys are never touched.
+author: ksamaschke/hermes-agent-fixes
