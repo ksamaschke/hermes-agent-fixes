@@ -1,0 +1,8 @@
+{
+ "hex-work-travel": {
+  "env": "~/.hermes/.env",
+  "labels": [
+   "ai.hermes.gateway"
+  ]
+ }
+}

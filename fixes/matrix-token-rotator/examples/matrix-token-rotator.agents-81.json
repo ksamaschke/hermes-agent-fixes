@@ -1,0 +1,14 @@
+{
+ "ponder-stibbons": {
+  "env": "~/.hermes/.env",
+  "labels": [
+   "ai.hermes.gateway"
+  ]
+ },
+ "agnes": {
+  "env": "~/.hermes/profiles/cheery/.env",
+  "labels": [
+   "ai.hermes.gateway"
+  ]
+ }
+}

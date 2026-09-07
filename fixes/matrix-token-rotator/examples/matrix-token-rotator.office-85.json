@@ -1,0 +1,21 @@
+{
+ "hermes-factory": {
+  "env": "~/.hermes/profiles/factory-release/.env",
+  "labels": [
+   "ai.hermes.gateway-factory-release"
+  ]
+ },
+ "hex-work": {
+  "env": [
+   "~/.hermes/.env",
+   "~/.hermes/profiles/factory-integration/.env",
+   "~/.hermes/profiles/minna-implementer/.env",
+   "~/.hermes/profiles/reviewer/.env",
+   "~/.hermes/profiles/vanillacore-release-executor/.env",
+   "~/.hermes/profiles/vanillacore-reviewer/.env"
+  ],
+  "labels": [
+   "ai.hermes.gateway"
+  ]
+ }
+}
