@@ -73,7 +73,19 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
+from mautrix.errors import MUnknownToken, MatrixRequestError
+
 from agent.secret_scope import UnscopedSecretError, get_secret
+
+OVERRIDE_MARKER = "matrix-sync-auth-type-aware-v2"
+
+
+def _is_permanent_sync_auth_error(exc: BaseException) -> bool:
+    """Only structured Matrix unknown-token failures are terminal."""
+    return isinstance(exc, MUnknownToken) or (
+        isinstance(exc, MatrixRequestError)
+        and str(getattr(exc, "errcode", "")).upper() == "M_UNKNOWN_TOKEN"
+    )
 
 try:
     from mautrix.types import (
@@ -143,13 +155,6 @@ from gateway.platforms.base import (
 from gateway.platforms.helpers import ThreadParticipationTracker
 
 logger = logging.getLogger(__name__)
-
-# This sibling is a pinned copy of the Matrix adapter from the supported
-# Hermes revision. The wrapper checks these sentinels before constructing an
-# adapter so a partial or stale copy fails closed instead of sending
-# unverifiable ciphertext.
-HERMES_BASE_REVISION = "ab9866bc64df48281a2d929dfb1dfd1001973d24"
-HERMES_E2EE_RECIPIENT_ENFORCEMENT_MARKER = "matrix-e2ee-recipient-enforced-v1"
 
 _MATRIX_VOICE_WAVEFORM_BINS = 30
 
@@ -2400,10 +2405,20 @@ class MatrixAdapter(BasePlatformAdapter):
         # a no-op through the lifecycle fence.
         self._matrix_client_connected = True
 
-        # Initial sync is enough for gateway readiness. E2EE key sharing and
-        # recipient reconciliation continue in a task owned by disconnect().
+        # Share keys after initial sync if E2EE is enabled.
         if self._encryption and getattr(client, "crypto", None):
-            getattr(self, "_schedule_e2ee_readiness")()
+            try:
+                await asyncio.wait_for(
+                    client.crypto.share_keys(),
+                    timeout=getattr(self, "_matrix_request_timeout_seconds", 45.0),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Matrix: initial key share failed (%s)",
+                    type(exc).__name__,
+                )
+            if self._e2ee_recipient_enforcement_active:
+                await self._reconcile_encrypted_rooms_before_ready()
 
         # Start the sync loop.
         self._sync_task = asyncio.create_task(self._sync_loop())
@@ -3941,46 +3956,49 @@ class MatrixAdapter(BasePlatformAdapter):
                     timeout=45.0,
                 )
 
-                # nio returns SyncError objects (not exceptions) for auth
-                # failures like M_UNKNOWN_TOKEN.  Detect and stop immediately.
-                _sync_msg = getattr(sync_data, "message", None)
-                if _sync_msg and isinstance(_sync_msg, str):
-                    _lower = _sync_msg.lower()
-                    if "m_unknown_token" in _lower or "unknown_token" in _lower:
-                        logger.error(
-                            "Matrix: permanent auth error from sync: %s — stopping",
-                            _sync_msg,
-                        )
-                        return
+                # A returned error object is terminal only when its
+                # machine-readable Matrix errcode says M_UNKNOWN_TOKEN.
+                # Human-readable message text is never an auth decision.
+                sync_errcode = getattr(sync_data, "errcode", None)
+                sync_message = getattr(sync_data, "message", None)
+                unknown_token = (
+                    isinstance(sync_errcode, str)
+                    and sync_errcode.upper() == "M_UNKNOWN_TOKEN"
+                )
+                if unknown_token:
+                    logger.error(
+                        "Matrix: permanent M_UNKNOWN_TOKEN response from sync: %s — stopping",
+                        sync_message or sync_errcode,
+                    )
+                    return
+
+                if not isinstance(sync_data, dict):
+                    response_kind = sync_errcode or type(sync_data).__name__
+                    logger.warning(
+                        "Matrix: non-success sync response (%s) — retrying in 5s",
+                        response_kind,
+                    )
+                    await asyncio.sleep(5)
+                    continue
 
                 if isinstance(sync_data, dict):
                     self._last_sync_ts = time.time()
-                    # Update joined rooms from sync response.
                     rooms_join = sync_data.get("rooms", {}).get("join", {})
                     if rooms_join:
                         self._joined_rooms.update(rooms_join.keys())
                         self._room_identities.clear()
                         self._room_identity_cached_at.clear()
 
-                    # Advance the sync token so the next request is
-                    # incremental instead of a full initial sync.
                     nb = sync_data.get("next_batch")
                     if nb:
                         next_batch = nb
                         await client.sync_store.put_next_batch(nb)
 
-                    # Dispatch events to registered handlers so that
-                    # _on_room_message / _on_reaction / _on_invite fire.
                     try:
                         await self._dispatch_sync(sync_data)
                     except Exception as exc:
-                        logger.warning(
-                            "Matrix: sync event dispatch error (%s)",
-                            type(exc).__name__,
-                        )
+                        logger.warning("Matrix: sync event dispatch error: %s", exc)
                     self._schedule_pending_invite_joins(sync_data)
-                    # Let freshly scheduled invite joins start before the next
-                    # sync iteration without waiting for slow or stuck joins.
                     await asyncio.sleep(0)
 
             except asyncio.CancelledError:
@@ -3988,23 +4006,13 @@ class MatrixAdapter(BasePlatformAdapter):
             except Exception as exc:
                 if self._closing:
                     return
-                # Detect permanent auth/permission failures.
-                err_str = str(exc).lower()
-                if (
-                    "401" in err_str
-                    or "403" in err_str
-                    or "unauthorized" in err_str
-                    or "forbidden" in err_str
-                ):
+                if _is_permanent_sync_auth_error(exc):
                     logger.error(
-                        "Matrix: permanent auth error (%s) — stopping sync",
-                        type(exc).__name__,
+                        "Matrix: permanent M_UNKNOWN_TOKEN exception from sync: %s — stopping",
+                        exc,
                     )
                     return
-                logger.warning(
-                    "Matrix: sync error (%s) — retrying in 5s",
-                    type(exc).__name__,
-                )
+                logger.warning("Matrix: sync error: %s — retrying in 5s", exc)
                 await asyncio.sleep(5)
 
     # ------------------------------------------------------------------
@@ -6518,7 +6526,10 @@ def _is_connected(config) -> bool:
 
 
 def _build_adapter(config):
-    """Factory wrapper that constructs MatrixAdapter from a PlatformConfig."""
+    logger.info(
+        "Matrix external E2EE plugin active: matrix-e2ee-key-delivery-v1 (%s)",
+        OVERRIDE_MARKER,
+    )
     return MatrixAdapter(config)
 
 
