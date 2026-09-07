@@ -1,0 +1,12 @@
+name: matrix-send-via-gateway
+label: Matrix Send via Gateway
+kind: standalone
+version: 1.0.0
+description: >
+  Lets scripts (cron output, watchdogs) send Matrix messages through the
+  already-running gateway adapter instead of spawning a second E2EE client
+  on the same crypto store. Two processes on one Olm account desynchronise
+  the Olm ratchets and every subsequent room key the gateway sends becomes
+  undecryptable for peers. Exposes <HERMES_HOME>/platforms/matrix/send.sock;
+  send.py is the drop-in replacement for `hermes send`.
+author: ksamaschke/hermes-agent-fixes
