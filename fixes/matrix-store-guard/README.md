@@ -64,6 +64,40 @@ The wrap is idempotent, so repeated plugin loads do not stack.
 - **Sessions, devices and keys are never touched.** Only `crypto_account` rows.
 - A failure inside the guard never blocks startup.
 
+## Second guard: a device's Olm identity is never silently replaced
+
+`identity.py` covers the other way a store can go wrong. A Matrix device id
+is only a label; what peers actually trust is the Olm identity
+(curve25519/ed25519 pair) in the local store. Whenever that store is
+recreated — moved, wiped, opened under a changed pickle key — mautrix creates
+a new Olm account and uploads its keys under the **same** device id, silently
+replacing the identity the server had.
+
+Peers never notice. Their Olm sessions with that device id still point at the
+old identity, so every room key they send is encrypted for a key the agent no
+longer owns. The agent logs `KeyError: <its own new identity key>` on each
+incoming to-device event, never receives a room key from those peers again,
+and "Unable to decrypt" becomes permanent for every client that talked to the
+old identity — while the gateway looks healthy and can still *send*. Only a
+new device id makes peers refetch keys and rebuild sessions.
+
+The guard wraps `OlmMachine._share_keys`. Before an initial device-key upload
+(`account.shared` is false) it runs `keys/query` for the agent's own device:
+
+- no keys on the server → fresh device, upload proceeds;
+- same keys → store restored from backup, upload proceeds;
+- **different keys → `IdentityMismatch` is raised and startup fails loudly**,
+  telling the operator to restore the previous store or log in with a new
+  device id. Hijacking the device is refused.
+
+A failing `keys/query` (network) does not block: the check is skipped with a
+warning rather than masking a legitimate upload.
+
+Observed on a live gateway: one agent's identity had been replaced three times
+under an unchanged device id. From the last replacement on, none of the
+operator's nine clients ever delivered a room key to it again. The fix was a
+new device id per agent; this guard makes the silent replacement impossible.
+
 ## Requirements
 
 - A Hermes gateway with Matrix E2EE enabled.
@@ -103,6 +137,13 @@ Honest status as of 2026-09-06, on a live two-agent gateway:
   encrypted rooms.
 - **Not a repair tool for lost keys.** Messages encrypted while the store was
   broken stay unreadable if no peer still holds the session.
+- **Identity guard (2026-09-07):** 7 offline tests against the installed
+  mautrix pass (fresh device, same identity, foreign identity refused, already
+  shared skipped, query failure tolerated, real `OlmMachine` patched
+  idempotently, guarded `_share_keys` refuses). Live negative test against the
+  homeserver: a freshly generated identity for the real device id was refused,
+  the store's real account was accepted. Both agents restarted with the guard
+  active and came up clean.
 
 ## Provenance
 

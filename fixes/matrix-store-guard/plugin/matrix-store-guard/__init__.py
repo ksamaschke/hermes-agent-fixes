@@ -99,8 +99,28 @@ def _patch_store_class() -> bool:
     return True
 
 
+def _install_identity_guard() -> None:
+    try:
+        from . import identity as _identity
+    except ImportError:  # loaded as a flat module, not a package
+        import importlib.util
+        import pathlib
+
+        spec = importlib.util.spec_from_file_location(
+            "hermes_plugins.matrix_store_guard.identity",
+            pathlib.Path(__file__).with_name("identity.py"),
+        )
+        _identity = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_identity)
+    _identity.install()
+
+
 def register(ctx: Any) -> None:
     """Hermes plugin entry point."""
+    try:
+        _install_identity_guard()
+    except Exception:
+        log.exception("matrix-store-guard: identity guard failed to install")
     try:
         if _patch_store_class():
             log.info(
