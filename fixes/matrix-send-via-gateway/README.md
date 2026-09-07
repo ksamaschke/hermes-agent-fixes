@@ -39,7 +39,7 @@ client of its own.
 
 ## Install
 
-    cp -r fixes/matrix-send-via-gateway ~/.hermes/plugins/
+    cp -r fixes/matrix-send-via-gateway/plugin/matrix-send-via-gateway ~/.hermes/plugins/
     # config.yaml: plugins.enabled += matrix-send-via-gateway
 
 Multiplexed secondary profiles discover plugins from **their own**
