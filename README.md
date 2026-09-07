@@ -8,7 +8,6 @@ This is **not** the upstream fork. The regularly synchronized source fork is [`k
 
 - [`fixes/matrix-e2ee-key-delivery/`](fixes/matrix-e2ee-key-delivery/) — explanation and optional patch for Matrix E2EE room-key delivery after reconnects.
 - [`fixes/matrix-store-guard/`](fixes/matrix-store-guard/) — keeps each profile's crypto store to its own Olm account; a duplicate account elsewhere silently competes for its device's one-time keys and blocks room-key delivery.
-- [`fixes/matrix-share-verify/`](fixes/matrix-share-verify/) — re-verifies restored Megolm room key shares, closing the restart-plus-stale-cache path that leaves a peer permanently unable to decrypt.
 - [`fixes/matrix-sas-verification/`](fixes/matrix-sas-verification/) — answers interactive emoji (SAS) device verification, which a screenless agent cannot do itself. Ships with an unresolved MAC failure documented.
 - [`fixes/matrix-room-key-recovery/`](fixes/matrix-room-key-recovery/) — user plugin that requests missing Megolm room keys instead of silently dropping undecryptable messages.
 - [`fixes/matrix-sync-auth-recovery/`](fixes/matrix-sync-auth-recovery/) — combined user plugin for recipient-verified Matrix E2EE key delivery and structured sync-auth recovery.
