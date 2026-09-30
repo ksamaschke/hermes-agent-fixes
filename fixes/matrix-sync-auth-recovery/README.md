@@ -1,5 +1,19 @@
 # Combined Matrix E2EE key delivery and sync-auth recovery
 
+> **Status 2026-09-30: broken on current Hermes; do not enable as is.**
+> `patched_upstream.py` is a copy of the Matrix adapter from 2026-09-04 and probes dependencies through
+> `tools.lazy_deps.is_available` / `feature_missing` / `ensure_and_bind`. Those no longer exist
+> (`tools/lazy_deps.py` is now a shim), so the plugin's `check_fn` returns `False` and the gateway logs
+> `Platform 'Matrix' requirements not met` / `No adapter available for matrix`. Because this plugin
+> re-registers the `matrix` platform, it also shadows the bundled adapter.
+>
+> - **Sync-auth part: now upstream.** The bundled adapter classifies auth failures by `errcode`/`http_status`
+>   (`_is_permanent_matrix_auth_error`) instead of substring-matching `401`/`403`.
+> - **Recipient-verified key delivery part: NOT upstream.** The bundled adapter has no zero-recipient
+>   check around the Megolm share, and `../matrix-e2ee-key-delivery/adapter.patch` no longer applies to it.
+>   Reviving this needs a rebase of the recipient enforcement onto the current adapter, as a plugin that
+>   does not re-register the whole platform.
+
 ## Purpose
 
 This bundle provides one explicitly enabled Hermes user plugin for two Matrix failure modes:

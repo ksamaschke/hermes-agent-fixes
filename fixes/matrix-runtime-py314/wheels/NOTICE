@@ -1,0 +1,8 @@
+The wheel in `wheels/` is a locally built binary of `python-olm` 3.2.16 (Apache-2.0,
+https://gitlab.matrix.org/matrix-org/olm), which bundles libolm (Apache-2.0).
+The only change to upstream source is `libolm-list-hh-const.patch` (one line).
+
+Licensed under the Apache License, Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
+
+Unofficial build, not supported by the Matrix.org Foundation. Rebuild it yourself with
+`./install.sh --rebuild` if you prefer not to trust a binary from a repository.
