@@ -1,0 +1,12 @@
+name: matrix-runtime-py314
+label: Matrix Runtime (macOS, Python 3.14)
+kind: standalone
+version: 1.0.0
+description: >
+  Makes the Matrix gateway with E2EE usable on macOS under Hermes' managed
+  Python runtime. Upstream gates the `matrix` extra to Linux because
+  python-olm has no macOS wheel and its bundled libolm does not build with
+  current clang/CMake. This plugin only appends a user-owned directory with a
+  locally built python-olm wheel plus mautrix and its drivers to sys.path;
+  managed-environment packages always win. No Hermes code is modified.
+author: ksamaschke/hermes-agent-fixes

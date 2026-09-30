@@ -1,0 +1,11 @@
+--- a/libolm/include/olm/list.hh
++++ b/libolm/include/olm/list.hh
+@@ -99,7 +99,7 @@
+             return *this;
+         }
+         T * this_pos = _data;
+-        T * const other_pos = other._data;
++        T * other_pos = other._data;
+         while (other_pos != other._end) {
+             *this_pos = *other;
+             ++this_pos;
