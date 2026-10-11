@@ -1,0 +1,15 @@
+name: matrix-free-room-silence
+label: Matrix Free-Room Silence
+kind: standalone
+version: 1.0.0
+description: >
+  Lets an agent stay silent in Matrix free-response rooms. Hermes accepts a
+  bare NO_REPLY only when the adapter marks the message as not addressed to the
+  bot (MessageEvent.reply_expected = False). The Slack adapter sets that flag,
+  the Matrix adapter does not, so every deliberate silence in a free-response
+  room is replaced by "The model returned only a silence marker ...". This
+  plugin sets the flag from the pre_gateway_dispatch hook for messages in
+  free-response rooms that neither mention the bot nor reply to it. Mentions,
+  replies to the bot, commands and DMs keep the visible fallback. No Hermes
+  code is modified.
+author: ksamaschke/hermes-agent-fixes

@@ -13,6 +13,7 @@ This is **not** the upstream fork. The regularly synchronized source fork is [`k
 - [`fixes/matrix-sas-verification/`](fixes/matrix-sas-verification/) — answers interactive emoji (SAS) device verification, which a screenless agent cannot do itself. Ships with an unresolved MAC failure documented.
 - [`fixes/matrix-room-key-recovery/`](fixes/matrix-room-key-recovery/) — user plugin that requests missing Megolm room keys instead of silently dropping undecryptable messages.
 - [`fixes/matrix-sync-auth-recovery/`](fixes/matrix-sync-auth-recovery/) — combined user plugin for recipient-verified Matrix E2EE key delivery and structured sync-auth recovery. **Status: does not load on current Hermes** (calls the removed `tools.lazy_deps` API, so it reports Matrix as unavailable); see its README.
+- [`fixes/matrix-free-room-silence/`](fixes/matrix-free-room-silence/) — lets an agent stay silent in Matrix free-response rooms instead of posting "The model returned only a silence marker" for every message not meant for it. Plugin only, sets `reply_expected` from the `pre_gateway_dispatch` hook.
 - [`fixes/matrix-runtime-py314/`](fixes/matrix-runtime-py314/) — makes Matrix with E2EE work on macOS under Hermes' managed Python 3.14 with the stock launcher: a locally built `python-olm` wheel plus `mautrix` in a user-owned directory, loaded by a small plugin. Nothing in Hermes is patched.
 
 Each fix directory should contain:
